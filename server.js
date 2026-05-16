@@ -29,7 +29,7 @@ function formatarValor(valor) {
 // ENDPOINTS
 // ================================================================
 
-// Receber dados do Roblox (brainrots e job IDs)
+// Receber dados do Roblox
 app.post('/api/brainrot', (req, res) => {
     console.log("📡 Requisição recebida:", req.body);
     
@@ -44,15 +44,11 @@ app.post('/api/brainrot', (req, res) => {
         return res.status(400).json({ error: "job_id é obrigatório" });
     }
     
-    // ================================================================
-    // TRATAMENTO DE JOB ID COM STATUS
-    // ================================================================
-    
     // Inicializa Job ID se não existir
     if (!jobIds[jobId]) {
         jobIds[jobId] = {
             job_id: jobId,
-            status: status,
+            status: "analisando",
             primeiro_registro: new Date().toISOString(),
             ultimo_acesso: new Date().toISOString(),
             total_brainrots: 0,
@@ -63,8 +59,7 @@ app.post('/api/brainrot', (req, res) => {
     }
     
     // ATUALIZA STATUS da Job ID
-    if (status === "boa" || (data.nome && !status)) {
-        // Se tem brainrot, marca como BOA
+    if (status === "boa" || (data.nome && status !== "ruim" && status !== "blacklist")) {
         jobIds[jobId].status = "boa";
         jobIds[jobId].total_brainrots = (jobIds[jobId].total_brainrots || 0) + 1;
         
@@ -75,18 +70,15 @@ app.post('/api/brainrot', (req, res) => {
         
         console.log(`✅ Job ID ${jobId.substring(0,8)}... marcada como BOA`);
         
-    } else if (status === "ruim" || status === "gameended") {
-        // Sem brainrot, marca como RUIM e vai para blacklist
+    } else if (status === "ruim" || status === "gameended" || data.motivo === "sem_brainrot") {
         jobIds[jobId].status = "ruim";
         
-        // Adiciona à blacklist se não estiver
         if (!blacklist.includes(jobId)) {
             blacklist.push(jobId);
-            console.log(`❌ Job ID ${jobId.substring(0,8)}... enviada para BLACKLIST (sem brainrot)`);
+            console.log(`❌ Job ID ${jobId.substring(0,8)}... enviada para BLACKLIST (status=ruim)`);
         }
         
     } else if (status === "blacklist") {
-        // Forçar blacklist
         if (!blacklist.includes(jobId)) {
             blacklist.push(jobId);
         }
@@ -94,17 +86,16 @@ app.post('/api/brainrot', (req, res) => {
         console.log(`⚠️ Job ID ${jobId.substring(0,8)}... FORÇADA para BLACKLIST`);
         
     } else {
-        // Status padrão (analisando)
-        jobIds[jobId].status = "analisando";
-        console.log(`⏳ Job ID ${jobId.substring(0,8)}... em análise`);
+        if (jobIds[jobId].status !== "boa" && jobIds[jobId].status !== "ruim" && jobIds[jobId].status !== "blacklist") {
+            jobIds[jobId].status = "analisando";
+        }
+        console.log(`⏳ Job ID ${jobId.substring(0,8)}... em análise (status: ${jobIds[jobId].status})`);
     }
     
     jobIds[jobId].ultimo_acesso = new Date().toISOString();
     jobIds[jobId].players = players;
     
-    // ================================================================
     // SALVA BRAINROT (se tiver)
-    // ================================================================
     if (data.nome) {
         const brainrot = {
             id: brainrots.length + 1,
@@ -115,7 +106,7 @@ app.post('/api/brainrot', (req, res) => {
             traits: data.traits,
             dono: data.dono,
             job_id: jobId,
-            status: status,
+            status: jobIds[jobId].status,
             players: players,
             timestamp: data.timestamp || Date.now(),
             recebido_em: new Date().toISOString()
@@ -134,25 +125,19 @@ app.post('/api/brainrot', (req, res) => {
     });
 });
 
-// ================================================================
-// LISTAR JOB IDs (todas)
-// ================================================================
+// Listar todas Job IDs
 app.get('/api/jobs', (req, res) => {
     const lista = Object.values(jobIds);
     res.json(lista);
 });
 
-// ================================================================
-// LISTAR APENAS JOB IDs BOAS (para revisitar)
-// ================================================================
+// Listar apenas Job IDs BOAS
 app.get('/api/good-jobs', (req, res) => {
     const boas = Object.values(jobIds).filter(job => job.status === "boa");
     res.json(boas);
 });
 
-// ================================================================
-// LISTAR BLACKLIST
-// ================================================================
+// Listar BLACKLIST
 app.get('/api/blacklist', (req, res) => {
     const blacklisted = Object.values(jobIds).filter(job => 
         job.status === "ruim" || job.status === "blacklist" || blacklist.includes(job.job_id)
@@ -160,60 +145,42 @@ app.get('/api/blacklist', (req, res) => {
     res.json(blacklisted);
 });
 
-// ================================================================
-// LISTAR BRAINROTS
-// ================================================================
+// Listar Brainrots
 app.get('/api/brainrots', (req, res) => {
     const limit = parseInt(req.query.limit) || 100;
     const brainrotsList = [...brainrots].reverse().slice(0, limit);
     res.json(brainrotsList);
 });
 
-// ================================================================
-// ADICIONAR JOB ID À BLACKLIST (endpoint separado)
-// ================================================================
+// Adicionar à blacklist
 app.post('/api/blacklist', (req, res) => {
     const { job_id } = req.body;
+    if (!job_id) return res.status(400).json({ error: "job_id é obrigatório" });
     
-    if (!job_id) {
-        return res.status(400).json({ error: "job_id é obrigatório" });
-    }
+    if (!blacklist.includes(job_id)) blacklist.push(job_id);
+    if (jobIds[job_id]) jobIds[job_id].status = "blacklist";
     
-    if (!blacklist.includes(job_id)) {
-        blacklist.push(job_id);
-    }
-    
-    if (jobIds[job_id]) {
-        jobIds[job_id].status = "blacklist";
-    }
-    
-    console.log(`⚠️ Job ID ${job_id.substring(0,8)}... adicionada à blacklist via endpoint`);
-    
-    res.json({
-        success: true,
-        job_id: job_id,
-        blacklist: blacklist
-    });
+    res.json({ success: true, job_id: job_id });
 });
 
-// ================================================================
-// REMOVER JOB ID DA BLACKLIST
-// ================================================================
+// Remover da blacklist
 app.delete('/api/blacklist/:jobId', (req, res) => {
     const jobId = req.params.jobId;
     const index = blacklist.indexOf(jobId);
-    if (index !== -1) {
-        blacklist.splice(index, 1);
-    }
-    if (jobIds[jobId]) {
-        jobIds[jobId].status = "analisando";
-    }
+    if (index !== -1) blacklist.splice(index, 1);
+    if (jobIds[jobId]) jobIds[jobId].status = "analisando";
     res.json({ success: true });
 });
 
-// ================================================================
-// ESTATÍSTICAS
-// ================================================================
+// Limpar todos os dados
+app.post('/api/clear-all', (req, res) => {
+    brainrots = [];
+    jobIds = {};
+    blacklist = [];
+    res.json({ success: true });
+});
+
+// Estatísticas
 app.get('/api/stats', (req, res) => {
     const totalJobs = Object.keys(jobIds).length;
     const boasJobs = Object.values(jobIds).filter(j => j.status === "boa").length;
@@ -231,13 +198,12 @@ app.get('/api/stats', (req, res) => {
         job_ids_analisando: analisandoJobs,
         blacklist_total: blacklist.length,
         valor_total: formatarValor(valorTotal),
-        maior_valor: formatarValor(maiorValor),
-        ultimo_brainrot: brainrots[brainrots.length - 1] || null
+        maior_valor: formatarValor(maiorValor)
     });
 });
 
 // ================================================================
-// DASHBOARD HTML COMPLETO
+// DASHBOARD HTML
 // ================================================================
 app.get('/', (req, res) => {
     res.send(`
@@ -311,7 +277,6 @@ app.get('/', (req, res) => {
             cursor: pointer;
         }
         .btn-danger { background: rgba(255,68,68,0.3); }
-        .btn-success { background: rgba(0,255,136,0.3); }
         
         .table-container {
             background: rgba(255,255,255,0.05);
@@ -359,6 +324,7 @@ app.get('/', (req, res) => {
         
         <div class="action-buttons">
             <button class="btn" onclick="carregarTudo()">🔄 Atualizar</button>
+            <button class="btn btn-danger" onclick="limparTudo()">⚠️ Limpar Todos os Dados</button>
         </div>
         
         <div class="tabs">
@@ -438,7 +404,7 @@ app.get('/', (req, res) => {
                     </tr>
                 \`;
             }).join('');
-            document.getElementById('jobs-list').innerHTML = html || '<tr><td colspan="6">Nenhuma Job ID</td></tr>';
+            document.getElementById('jobs-list').innerHTML = html || '<tr><td colspan="6">Nenhuma Job ID</td>' .. '</tr>';
         }
         
         async function carregarBoas() {
@@ -452,7 +418,7 @@ app.get('/', (req, res) => {
                     <td>\${job.melhor_brainrot || '-'}</td>
                 </tr>
             \`).join('');
-            document.getElementById('boas-list').innerHTML = html || '<tr><td colspan="4">Nenhuma Job ID BOA</td></tr>';
+            document.getElementById('boas-list').innerHTML = html || '<tr><td colspan="4">Nenhuma Job ID BOA</td>' .. '</tr>';
         }
         
         async function carregarBlacklist() {
@@ -462,11 +428,11 @@ app.get('/', (req, res) => {
                 <tr>
                     <td><code>\${job.job_id?.substring(0, 30)}...</code></td>
                     <td><span class="badge-bad">❌ BLACKLIST</span></td>
-                    <td>Sem brainrot</td>
+                    <td>Sem brainrot ou valor baixo</td>
                     <td><button class="delete-btn" onclick="removerBlacklist('\${job.job_id}')">🗑️ Remover</button></td>
                 </tr>
             \`).join('');
-            document.getElementById('blacklist-list').innerHTML = html || '<tr><td colspan="4">Nenhuma Job ID na blacklist</td></tr>';
+            document.getElementById('blacklist-list').innerHTML = html || '<tr><td colspan="4">Nenhuma Job ID na blacklist</td>' .. '</tr>';
         }
         
         async function carregarBrainrots() {
@@ -480,12 +446,19 @@ app.get('/', (req, res) => {
                     <td>\${new Date(b.recebido_em).toLocaleString()}</td>
                 </tr>
             \`).join('');
-            document.getElementById('brainrots-list').innerHTML = html || '<tr><td colspan="4">Nenhum brainrot</td></tr>';
+            document.getElementById('brainrots-list').innerHTML = html || '<tr><td colspan="4">Nenhum brainrot</td>' .. '</tr>';
         }
         
         async function removerBlacklist(jobId) {
             await fetch(\`/api/blacklist/\${jobId}\`, { method: 'DELETE' });
             carregarTudo();
+        }
+        
+        async function limparTudo() {
+            if(confirm('⚠️ ISSO VAI APAGAR TODOS OS DADOS! Tem certeza?')) {
+                await fetch('/api/clear-all', { method: 'POST' });
+                carregarTudo();
+            }
         }
         
         function formatarValor(valor) {
@@ -547,9 +520,9 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`📊 Dashboard: http://localhost:${PORT}`);
     console.log('');
     console.log('✅ Status implementados:');
-    console.log('  - "boa": Job ID com brainrot');
+    console.log('  - "boa": Job ID com brainrot (valor >= 1M)');
     console.log('  - "ruim": Job ID sem brainrot (blacklist)');
-    console.log('  - "gameended": Servidor encerrado (blacklist)');
+    console.log('  - "blacklist": Job ID na blacklist');
     console.log('  - "analisando": Status inicial');
     console.log('='.repeat(50));
 });
